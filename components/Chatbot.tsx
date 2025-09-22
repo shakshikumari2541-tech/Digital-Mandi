@@ -1,13 +1,19 @@
 "use client"
 
 import type React from "react"
-import type { SpeechRecognition } from "web-speech-api"
+/* Removed import of 'web-speech-api' as it is a browser API and does not need to be imported */
 import { useState, useRef, useEffect } from "react"
 import { useApp } from "@/contexts/AppContext"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import React, { forwardRef } from "react"
+import { Input as OriginalInput } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+
+// Wrap Input with forwardRef to support ref forwarding
+const Input = forwardRef<HTMLInputElement, React.ComponentProps<typeof OriginalInput>>((props, ref) => (
+  <OriginalInput ref={ref} {...props} />
+))
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Bot, Send, Mic, MicOff, X, MessageCircle, Languages } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
@@ -34,6 +40,31 @@ export function Chatbot({ isOpen, onClose }: ChatbotProps) {
   const [recognition, setRecognition] = useState<SpeechRecognition | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [isAtBottom, setIsAtBottom] = useState(true)
+
+  const renderBold = (line: string) => {
+    const parts = line.split(/(\*\*[^*]+\*\*)/g)
+    return parts.map((part, idx) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        const content = part.slice(2, -2)
+        return (
+          <strong key={idx}>{content}</strong>
+        )
+      }
+      return <React.Fragment key={idx}>{part}</React.Fragment>
+    })
+  }
+
+  const renderBasicMarkdown = (text: string) => {
+    const lines = text.split("\n")
+    return lines.map((line, i) => (
+      <span key={i}>
+        {renderBold(line)}
+        {i < lines.length - 1 ? <br /> : null}
+      </span>
+    ))
+  }
 
   const translations = {
     hi: {
@@ -76,7 +107,7 @@ export function Chatbot({ isOpen, onClose }: ChatbotProps) {
       recognitionInstance.interimResults = false
       recognitionInstance.lang = language === "hi" ? "hi-IN" : "en-US"
 
-      recognitionInstance.onresult = (event) => {
+      recognitionInstance.onresult = (event: SpeechRecognitionEvent) => {
         const transcript = event.results[0][0].transcript
         setInputText(transcript)
         setIsListening(false)
@@ -108,10 +139,25 @@ export function Chatbot({ isOpen, onClose }: ChatbotProps) {
     }
   }, [isOpen, messages.length, t.welcomeMessage, language])
 
-  // Scroll to bottom when new messages arrive
+  // Scroll to bottom when new messages arrive if user is already at bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+    if (isAtBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [messages, isAtBottom])
+
+  const onViewportScroll: React.UIEventHandler<HTMLDivElement> = (e) => {
+    const target = e.currentTarget
+    const threshold = 16
+    const atBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - threshold
+    setIsAtBottom(atBottom)
+  }
+
+  const scrollToBottom = () => {
+    const el = viewportRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+  }
 
   // Focus input when chatbot opens
   useEffect(() => {
@@ -120,98 +166,25 @@ export function Chatbot({ isOpen, onClose }: ChatbotProps) {
     }
   }, [isOpen])
 
-  const generateAIResponse = async (userMessage: string): Promise<string> => {
-    // Mock AI responses based on keywords and context
-    const lowerMessage = userMessage.toLowerCase()
+  const getAIResponse = async (userMessage: string): Promise<string> => {
+    try {
+      const response = await fetch("/api/chatbot", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ message: userMessage, language }),
+      })
 
-    const responses = {
-      hi: {
-        greeting: [
-          "नमस्ते! मैं आपकी कैसे मदद कर सकता हूँ?",
-          "आपका स्वागत है! कृषि संबंधी कोई भी सवाल पूछें।",
-          "हैलो! मैं यहाँ आपकी सहायता के लिए हूँ।",
-        ],
-        pricing: [
-          "मूल्य निर्धारण के लिए, मैं बाज़ार की मांग, मौसम, और गुणवत्ता के आधार पर सुझाव देता हूँ। आपका कौन सा उत्पाद है?",
-          "सही मूल्य के लिए उत्पाद की गुणवत्ता, मात्रा, और स्थानीय बाज़ार की जांच करें।",
-          "AI के आधार पर, जैविक उत्पादों का मूल्य 20-30% अधिक हो सकता है।",
-        ],
-        farming: [
-          "कृषि में सफलता के लिए सही बीज, उर्वरक, और पानी का प्रबंधन जरूरी है।",
-          "मौसम के अनुसार फसल चुनें और जैविक खाद का उपयोग करें।",
-          "नई तकनीक और AI का उपयोग करके अपनी फसल की गुणवत्ता बढ़ाएं।",
-        ],
-        market: [
-          "Digital Mandi में आप सीधे उपभोक्ताओं से जुड़ सकते हैं और बेहतर मूल्य पा सकते हैं।",
-          "बाज़ार की मांग के अनुसार अपने उत्पाद की मार्केटिंग करें।",
-          "ऑनलाइन प्लेटफॉर्म का उपयोग करके अपनी पहुंच बढ़ाएं।",
-        ],
-        default: [
-          "यह एक दिलचस्प सवाल है! कृषि के बारे में और बताएं।",
-          "मैं आपकी मदद करने की कोशिश करूंगा। कृपया अधिक विवरण दें।",
-          "Digital Mandi के बारे में कोई और सवाल है?",
-        ],
-      },
-      en: {
-        greeting: [
-          "Hello! How can I help you today?",
-          "Welcome! Feel free to ask any farming-related questions.",
-          "Hi there! I'm here to assist you with your agricultural needs.",
-        ],
-        pricing: [
-          "For pricing suggestions, I consider market demand, weather conditions, and product quality. What product are you selling?",
-          "To get the right price, check product quality, quantity, and local market conditions.",
-          "Based on AI analysis, organic products can be priced 20-30% higher than conventional ones.",
-        ],
-        farming: [
-          "Successful farming requires proper seed selection, fertilizer management, and water conservation.",
-          "Choose crops according to the season and use organic fertilizers for better results.",
-          "Leverage new technology and AI to improve your crop quality and yield.",
-        ],
-        market: [
-          "Digital Mandi connects you directly with consumers, helping you get better prices.",
-          "Market your products according to consumer demand and seasonal trends.",
-          "Use online platforms to expand your reach and increase sales.",
-        ],
-        default: [
-          "That's an interesting question! Tell me more about your farming needs.",
-          "I'll try to help you with that. Could you provide more details?",
-          "Do you have any other questions about Digital Mandi?",
-        ],
-      },
+      if (!response.ok) {
+        throw new Error("Failed to get AI response")
+      }
+
+      const data = await response.json()
+      return data.reply || "Sorry, I couldn't generate a response."
+    } catch (error) {
+      return t.errorMessage
     }
-
-    const currentResponses = responses[language]
-
-    // Determine response category based on keywords
-    let category = "default"
-    if (lowerMessage.includes("hello") || lowerMessage.includes("hi") || lowerMessage.includes("नमस्ते")) {
-      category = "greeting"
-    } else if (
-      lowerMessage.includes("price") ||
-      lowerMessage.includes("cost") ||
-      lowerMessage.includes("मूल्य") ||
-      lowerMessage.includes("दाम")
-    ) {
-      category = "pricing"
-    } else if (
-      lowerMessage.includes("farm") ||
-      lowerMessage.includes("crop") ||
-      lowerMessage.includes("कृषि") ||
-      lowerMessage.includes("फसल")
-    ) {
-      category = "farming"
-    } else if (
-      lowerMessage.includes("market") ||
-      lowerMessage.includes("sell") ||
-      lowerMessage.includes("बाज़ार") ||
-      lowerMessage.includes("बेचना")
-    ) {
-      category = "market"
-    }
-
-    const categoryResponses = currentResponses[category as keyof typeof currentResponses]
-    return categoryResponses[Math.floor(Math.random() * categoryResponses.length)]
   }
 
   const handleSendMessage = async () => {
@@ -230,10 +203,7 @@ export function Chatbot({ isOpen, onClose }: ChatbotProps) {
     setIsLoading(true)
 
     try {
-      // Simulate API delay
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      const aiResponse = await generateAIResponse(userMessage.text)
+      const aiResponse = await getAIResponse(userMessage.text)
 
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -317,10 +287,15 @@ export function Chatbot({ isOpen, onClose }: ChatbotProps) {
             </div>
           </CardHeader>
 
-          <CardContent className="flex-1 flex flex-col p-0">
+          <CardContent className="relative flex-1 flex flex-col p-0 min-h-0">
             {/* Messages */}
-            <ScrollArea className="flex-1 p-4">
-              <div className="space-y-4">
+            <ScrollArea
+              className="flex-1 min-h-0 p-4"
+              viewportRef={viewportRef}
+              onViewportScroll={onViewportScroll}
+              viewportClassName="h-full"
+            >
+              <div className="space-y-4 pr-2">
                 {messages.map((message) => (
                   <motion.div
                     key={message.id}
@@ -330,11 +305,11 @@ export function Chatbot({ isOpen, onClose }: ChatbotProps) {
                     className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
                   >
                     <div
-                      className={`max-w-[80%] p-3 rounded-lg ${
+                      className={`max-w-[80%] p-3 rounded-lg overflow-hidden ${
                         message.sender === "user" ? "bg-gradient-green text-white" : "bg-muted text-muted-foreground"
                       }`}
                     >
-                      <p className="text-sm">{message.text}</p>
+                      <p className="text-sm break-words whitespace-pre-wrap">{renderBasicMarkdown(message.text)}</p>
                       <p className="text-xs opacity-70 mt-1">
                         {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       </p>
@@ -360,6 +335,16 @@ export function Chatbot({ isOpen, onClose }: ChatbotProps) {
                 <div ref={messagesEndRef} />
               </div>
             </ScrollArea>
+
+            {/* Scroll to bottom button */}
+            {!isAtBottom && (
+              <div className="absolute bottom-24 right-6">
+                <Button size="sm" variant="secondary" onClick={scrollToBottom} className="shadow">
+                  <MessageCircle className="w-4 h-4 mr-1" />
+                  {language === "hi" ? "नीचे जाएँ" : "Scroll to bottom"}
+                </Button>
+              </div>
+            )}
 
             {/* Input */}
             <div className="p-4 border-t border-border">
